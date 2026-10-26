@@ -490,6 +490,7 @@ async function syncNow() {
     refreshView(changed);
   } catch {
     setSync(navigator.onLine === false ? "offline" : "error");
+    renderList();
   } finally {
     sync.busy = false;
     const left = Object.keys(pending).length;
@@ -557,6 +558,11 @@ function renderList() {
 
   const firstLoad = !entries.length && !getLocal(SYNCED_KEY) && (sync.state === "idle" || sync.state === "syncing");
   if (dbState === "loading" || firstLoad) { list.replaceChildren(h("div", { class: "empty" }, "Loading races…")); return; }
+  if (dbState === "ready" && !entries.length && !getLocal(SYNCED_KEY)) {
+    // Never synced on this device and the server can't be reached
+    list.replaceChildren(h("div", { class: "notice" }, "Can't load the races yet because the race server can't be reached. Check your connection, then tap Try again above."));
+    return;
+  }
   if (dbState === "off") {
     list.replaceChildren(h("div", { class: "notice" }, "This browser is blocking storage, so races can't be saved. Turn off Private Browsing, or open the Race Book from your home screen."));
     return;
@@ -965,6 +971,13 @@ syncNow();
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 if ("serviceWorker" in navigator && location.protocol !== "file:") {
   addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+  // A newer version just took over: reload into it, unless a form is open
+  const hadWorker = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!hadWorker) return;
+    if (mode === "view") location.reload();
+    else toast("An update is ready. It'll load the next time you open the Race Book.");
+  });
 }
 </script>
 </body>
