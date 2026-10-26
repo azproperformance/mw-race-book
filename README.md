@@ -2,38 +2,61 @@
 
 A race-by-race setup log for the RZR 170 / 570 program: tires, gearing, clutch
 weights, best lap and notes for every session. It's a web app that installs to
-an iPhone home screen. You don't need an App Store app or a login, and it
-works with no signal at the track.
+an iPhone home screen (no App Store app, no login) and syncs between every
+phone and computer that opens it.
 
-## Where the data lives
+## How it fits together
 
-Races are saved **on the phone itself** (browser storage). Nothing is sent to a
-server, and this repo holds only the app's code, never your race data.
-
-That also means:
-- Each device has its own copy of the data.
-- On iPhone, the home screen app and Safari keep separate storage. Add the app
-  to the home screen first, and always open it from the icon.
-- **Back up regularly:** Backup → Export to Excel. That Excel file is how you move your
-  races to a new phone (Backup → Restore from Excel on the new phone).
+- **The app** (`index.html`, `sw.js`, `manifest.webmanifest`, `icons/`) is a
+  static site on GitHub Pages: https://azproperformance.github.io/mw-race-book/
+- **The sync server** (`server/`) runs on Render and keeps the races in one
+  JSON file on a Render disk. There's no login: anyone with the app's link can
+  see and change the races.
+- Each device also keeps its own copy, so the app works with no signal at the
+  track. Changes made offline wait on the device and sync when the
+  connection comes back (the status line under the filters shows this).
+  When two devices edit the same race, the most recent edit wins.
 
 ## Install on an iPhone
 
-1. Open the app's GitHub Pages address in **Safari**.
+1. Open the app's address in **Safari**.
 2. Tap **Share**, then **Add to Home Screen**.
 3. Open the Race Book from the new home screen icon.
 
-## Files
+## Excel
 
-- `index.html`: the whole app (layout, styles and code)
-- `sw.js`: offline support. **Bump `VERSION` whenever you change app files**
-  so phones pick up the update.
-- `manifest.webmanifest`, `icons/`: home screen name and icon
+Backup → **Export to Excel** saves every race to one `.xlsx` file;
+**Import from Excel** adds races from such a file (keep the Entry ID column if
+you edit it). The Excel tool is SheetJS (xlsx 0.18.5) from cdnjs, cached for
+offline use after the first load.
 
-The Excel export uses SheetJS (xlsx 0.18.5) from cdnjs. It's cached for offline
-use the first time the app loads with a connection.
+## Changing the app
 
-## Hosting
+- Edit `index.html`, then **bump `VERSION` in `sw.js`** so phones pick up the
+  update. Push to `main`; GitHub Pages republishes in about a minute.
+- The server's address is the `API` constant in `index.html`. If the Render
+  service gets a different URL, update it there.
 
-Served as a static site from GitHub Pages (Settings → Pages → Deploy from a
-branch → `main`, `/ (root)`). Any static host works; there's no build step.
+## Sync server on Render
+
+Created from `render.yaml` (Render → New → Blueprint → this repo): a Starter
+web service with a 1 GB disk at `/var/data`, deployed from `server/`.
+
+Environment:
+- `DATA_DIR`: where `races.json` is kept (`/var/data`)
+- `ALLOWED_ORIGINS`: sites allowed to call it from a browser
+  (`https://azproperformance.github.io`)
+
+Endpoints: `GET /health`, `GET /api/races`, and `POST /api/races/sync` with
+`{ "changes": [...] }`. Sync returns every race, including deleted markers.
+
+Run it locally:
+
+```bash
+cd server
+npm install
+npm run dev
+```
+
+It listens on port 3200. The app talks to it automatically when the app is
+opened from `localhost`.

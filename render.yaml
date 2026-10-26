@@ -1,0 +1,24 @@
+# Render Blueprint: Render → New → Blueprint → pick this repo.
+# Only the sync server runs on Render; the app itself stays on GitHub Pages.
+services:
+  - type: web
+    name: mw-race-book
+    runtime: node
+    rootDir: server
+    # A paid instance stays on (free ones sleep and take ~a minute to wake),
+    # and is required for the disk that holds the races.
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    disk:
+      name: data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATA_DIR
+        value: /var/data
+      - key: ALLOWED_ORIGINS
+        value: https://azproperformance.github.io

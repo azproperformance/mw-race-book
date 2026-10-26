@@ -33,6 +33,7 @@
   --band-ink: #f4f1f2;
   --band-line: #3a3336;
   --gold: #a87400;
+  --ok: #1d8a4a;
   --display: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
   --body: "Barlow", "Segoe UI", system-ui, -apple-system, sans-serif;
   --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
@@ -41,14 +42,14 @@
   :root:not([data-theme="light"]) {
     --bg: #121012; --surface: #1b181a; --ink: #f2eeef; --muted: #a69da1; --line: #322c2f;
     --sel: #34191c; --chip: #262124; --accent: #ff3d45; --on-accent: #ffffff; --danger: #ff6b70;
-    --band: #0a090a; --band-ink: #f4f1f2; --band-line: #3a3336; --gold: #e0a92e;
+    --band: #0a090a; --band-ink: #f4f1f2; --band-line: #3a3336; --gold: #e0a92e; --ok: #3ccf78;
     color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --bg: #121012; --surface: #1b181a; --ink: #f2eeef; --muted: #a69da1; --line: #322c2f;
   --sel: #34191c; --chip: #262124; --accent: #ff3d45; --on-accent: #ffffff; --danger: #ff6b70;
-  --band: #0a090a; --band-ink: #f4f1f2; --band-line: #3a3336; --gold: #e0a92e;
+  --band: #0a090a; --band-ink: #f4f1f2; --band-line: #3a3336; --gold: #e0a92e; --ok: #3ccf78;
   color-scheme: dark;
 }
 
@@ -166,6 +167,13 @@ select {
 }
 .summary { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; color: var(--muted); font-size: 13px; }
 .summary b { color: var(--ink); font-weight: 600; }
+.sync { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); min-height: 18px; }
+.sync .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: 0 0 auto; }
+.sync[data-state="ok"] .dot { background: var(--ok); }
+.sync[data-state="pending"] .dot, .sync[data-state="syncing"] .dot { background: var(--gold); }
+.sync[data-state="offline"] .dot, .sync[data-state="error"] .dot { background: var(--accent); }
+.sync[data-state="idle"] { visibility: hidden; }
+.sync .btn-link { padding: 0; font-size: 12.5px; }
 
 /* Entry list */
 .list { overflow: auto; border-top: 1px solid var(--line); min-height: 0; }
@@ -286,7 +294,7 @@ legend { padding: 0 6px; margin-left: -6px; font: 700 15px/1 var(--display); tex
     <p><b>Put the Race Book on your home screen</b>
       In Safari, tap Share
       <svg class="share-glyph" width="16" height="18" viewBox="0 0 16 20" fill="none" stroke="currentColor" stroke-width="1.8" aria-label="Share icon"><path d="M8 13V1M4 5l4-4 4 4M3 9H1v10h14V9h-2"/></svg>
-      then <strong>Add to Home Screen</strong>. Open it from the home screen icon from then on: races saved here in Safari stay in Safari and don't carry over to the home screen app.</p>
+      then <strong>Add to Home Screen</strong>. It opens full-screen like an app, and your races sync with your computer.</p>
     <button class="icon-x" id="install-x" type="button" aria-label="Hide this tip">×</button>
   </div>
 </div>
@@ -305,6 +313,7 @@ legend { padding: 0 6px; margin-left: -6px; font: 700 15px/1 var(--display); tex
       </div>
     </div>
     <div class="summary" id="summary"></div>
+    <div class="sync" id="sync" role="status" aria-live="polite"></div>
     <div class="list" id="list"></div>
   </aside>
   <main class="detail-pane" id="detail"></main>
@@ -390,27 +399,130 @@ function toast(msg) {
   toast.timer = setTimeout(() => { t.hidden = true; }, 3200);
 }
 
-/* ---------- storage (this device only) ---------- */
+/* ---------- storage: a copy on this device, synced with the server ---------- */
+// The live sync server, or a local one when testing on this computer
+const API = /^(localhost|127\.0\.0\.1)$/.test(location.hostname) ? `http://${location.hostname}:3200` : "https://mw-race-book.onrender.com";
+const RECORDS_KEY = "mwrb-records-v2";  // every race this device knows, deleted ones included
+const PENDING_KEY = "mwrb-pending-v2";  // changes the server hasn't confirmed yet
+const SYNCED_KEY = "mwrb-last-sync";
+const SYNC_BATCH = 500;
+let records = {}, pending = {};
+const sync = { state: "idle", busy: false, timer: null };
+
+const newId = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2, 10));
+const getLocal = k => { try { return localStorage.getItem(k); } catch { return null; } };
+const setLocal = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
+const visibleEntries = () => sortEntries(Object.values(records).filter(r => r && r.id && !r.deleted));
+
 function loadEntries() {
   try {
-    const raw = localStorage.getItem(STORE_KEY);
-    const list = raw ? JSON.parse(raw) : [];
-    entries = sortEntries(Array.isArray(list) ? list.filter(e => e && typeof e === "object" && e.id) : []);
+    records = JSON.parse(localStorage.getItem(RECORDS_KEY) || "null");
+    pending = JSON.parse(localStorage.getItem(PENDING_KEY) || "{}") || {};
+    if (!records) {
+      // First run after the sync update: queue the races the phone-only version saved
+      records = {};
+      const old = JSON.parse(localStorage.getItem(STORE_KEY) || "[]");
+      for (const e of Array.isArray(old) ? old : []) {
+        if (!e || !e.id) continue;
+        const rec = { ...e, updatedAt: e.updatedAt || new Date().toISOString() };
+        records[rec.id] = rec; pending[rec.id] = rec;
+      }
+      writeLocal();
+    }
+    entries = visibleEntries();
     dbState = "ready";
   } catch {
     dbState = "off";
   }
 }
 
-function persist(next) {
-  // Throws when storage is full or blocked; callers keep the old list on failure
-  localStorage.setItem(STORE_KEY, JSON.stringify(next));
-  entries = sortEntries(next);
+function writeLocal() {
+  localStorage.setItem(RECORDS_KEY, JSON.stringify(records));
+  localStorage.setItem(PENDING_KEY, JSON.stringify(pending));
 }
 
-const newId = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2, 10));
-const getLocal = k => { try { return localStorage.getItem(k); } catch { return null; } };
-const setLocal = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
+// Saves changed races on this device right away, then sends them to the server.
+// Throws when this device's storage is full or blocked, leaving everything as it was.
+function commit(changed) {
+  const prevRecords = records, prevPending = pending;
+  records = { ...records }; pending = { ...pending };
+  for (const rec of changed) { records[rec.id] = rec; pending[rec.id] = rec; }
+  try { writeLocal(); }
+  catch (err) { records = prevRecords; pending = prevPending; throw err; }
+  entries = visibleEntries();
+  setSync(navigator.onLine === false ? "offline" : "pending");
+  scheduleSync(300);
+}
+
+function scheduleSync(ms) {
+  clearTimeout(sync.timer);
+  // A hidden app doesn't poll; it syncs again when it's opened
+  sync.timer = setTimeout(() => { if (document.visibilityState !== "hidden") syncNow(); }, ms);
+}
+
+async function syncNow() {
+  if (sync.busy || dbState !== "ready") return;
+  clearTimeout(sync.timer);
+  sync.busy = true;
+  setSync("syncing");
+  const sent = Object.values(pending).slice(0, SYNC_BATCH);
+  try {
+    const ctl = new AbortController();
+    const timeout = setTimeout(() => ctl.abort(), 20000);
+    const res = await fetch(API + "/api/races/sync", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ changes: sent }), signal: ctl.signal,
+    }).finally(() => clearTimeout(timeout));
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const { races } = await res.json();
+    const next = {};
+    for (const r of Array.isArray(races) ? races : []) if (r && r.id) next[r.id] = r;
+    const stillPending = { ...pending };
+    for (const s of sent) if (stillPending[s.id] === s) delete stillPending[s.id];
+    // Edits made while the request was out are newer than the server's copy
+    for (const r of Object.values(stillPending)) next[r.id] = r;
+    const changed = JSON.stringify(visibleEntries()) !== JSON.stringify(sortEntries(Object.values(next).filter(r => !r.deleted)));
+    records = next; pending = stillPending;
+    try { writeLocal(); } catch {}
+    entries = visibleEntries();
+    setLocal(SYNCED_KEY, new Date().toISOString());
+    setSync(Object.keys(pending).length ? "pending" : "ok");
+    refreshView(changed);
+  } catch {
+    setSync(navigator.onLine === false ? "offline" : "error");
+  } finally {
+    sync.busy = false;
+    const left = Object.keys(pending).length;
+    scheduleSync(left && sync.state === "pending" ? 200 : left ? 20000 : 30000);
+  }
+}
+
+// Redraws after a sync without disturbing a form that's being filled in
+function refreshView(changed) {
+  if (!changed) { renderList(); return; }
+  if (mode === "view") render();
+  else {
+    const lists = $("form-lists");
+    if (lists) lists.replaceChildren(...datalists());
+    renderList();
+  }
+}
+
+function setSync(state) {
+  sync.state = state;
+  const n = Object.keys(pending).length, waiting = `${n} ${n === 1 ? "change" : "changes"} waiting to sync`;
+  const label = {
+    syncing: "Syncing…",
+    ok: "Synced",
+    pending: n ? waiting : "Synced",
+    offline: n ? `No connection · ${waiting}` : "No connection · showing the last synced copy",
+    error: n ? `Can't reach the server · ${waiting}` : "Can't reach the server · showing the last synced copy",
+  }[state] || "";
+  const el = $("sync");
+  el.dataset.state = state === "pending" && !n ? "ok" : state;
+  el.replaceChildren(h("span", { class: "dot", "aria-hidden": "true" }), h("span", {}, label),
+    (state === "error" || state === "offline") ? h("button", { class: "btn-link", type: "button", onclick: syncNow }, "Try again") : "");
+}
 
 /* ---------- filtering ---------- */
 function filtered() {
@@ -443,7 +555,8 @@ function renderList() {
     isFiltered ? h("button", { class: "btn-link", type: "button", onclick: clearFilters }, "Clear filters") : ""
   );
 
-  if (dbState === "loading") { list.replaceChildren(h("div", { class: "empty" }, "Loading race log…")); return; }
+  const firstLoad = !entries.length && !getLocal(SYNCED_KEY) && (sync.state === "idle" || sync.state === "syncing");
+  if (dbState === "loading" || firstLoad) { list.replaceChildren(h("div", { class: "empty" }, "Loading races…")); return; }
   if (dbState === "off") {
     list.replaceChildren(h("div", { class: "notice" }, "This browser is blocking storage, so races can't be saved. Turn off Private Browsing, or open the Race Book from your home screen."));
     return;
@@ -551,7 +664,7 @@ function deleteButton(e) {
     }
     clearTimeout(timer); btn.disabled = true;
     try {
-      persist(entries.filter(x => x.id !== e.id));
+      commit([{ id: e.id, deleted: true, updatedAt: new Date().toISOString() }]);
       sel = null; render(); toast("Entry deleted");
     } catch { btn.disabled = false; toast("Couldn't delete. Try again."); }
   });
@@ -567,11 +680,7 @@ function renderOverview() {
     );
   }
   const latest = entries[0];
-  const last = getLocal(BACKUP_KEY), days = last ? Math.floor((Date.now() - Date.parse(last)) / 864e5) : null;
   return h("div", { class: "overview" },
-    days == null || days >= 14 ? h("div", { class: "notice warn" },
-      h("span", {}, days == null ? "No backup yet. " : `Last backup was ${days} days ago. `, "Your races are saved only on this device, so export them to Excel now and then."),
-      h("button", { class: "btn btn-primary", type: "button", onclick: openBackup }, "Back up now")) : "",
     h("div", { class: "tiles" },
       [[entries.length, "sessions logged"], [uniq(entries.map(e => val(e, "track"))).length, "tracks"], [uniq(entries.map(e => val(e, "racer"))).length, "racers"]]
         .map(([n, l]) => h("div", { class: "tile" }, h("b", {}, n), h("span", {}, l)))
@@ -686,9 +795,9 @@ function saveForm(ev) {
   const id = wasNew ? newId() : formSeed.id;
   const rec = { ...vals, id, createdAt: (!wasNew && formSeed.createdAt) || now, updatedAt: now };
   try {
-    persist(wasNew ? [...entries, rec] : entries.map(x => (x.id === id ? rec : x)));
+    commit([rec]);
   } catch {
-    toast("Couldn't save: this device's storage is full or blocked. Save a backup, delete old entries, then try again.");
+    toast("Couldn't save: this device's storage is full or blocked. Turn off Private Browsing and try again.");
     return;
   }
   if (wasNew) clearDraft();
@@ -767,20 +876,23 @@ async function restoreExcel(file) {
     return;
   }
   const byId = new Map(entries.map(e => [e.id, e]));
+  const changed = [], now = new Date().toISOString();
+  // The server only accepts its own ID and timestamp formats; replace anything typed by hand
+  const isIso = s => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/.test(s);
   let added = 0, updated = 0;
   for (const row of rows.slice(1)) {
     const rec = {};
     keys.forEach((k, i) => { if (k) rec[k] = cellText(row[i]); });
     if (!FIELDS.some(f => rec[f.k])) continue; // blank row
     for (const f of FIELDS) rec[f.k] = rec[f.k] || "";
-    rec.id = rec.id || newId();
-    rec.createdAt = rec.createdAt || new Date().toISOString();
-    rec.updatedAt = rec.updatedAt || rec.createdAt;
+    if (!/^[A-Za-z0-9_-]{1,100}$/.test(rec.id || "")) rec.id = newId();
+    if (!isIso(rec.createdAt || "")) rec.createdAt = now;
+    if (!isIso(rec.updatedAt || "")) rec.updatedAt = rec.createdAt;
     const have = byId.get(rec.id);
-    if (!have) { byId.set(rec.id, rec); added++; }
-    else if (rec.updatedAt > val(have, "updatedAt")) { byId.set(rec.id, rec); updated++; }
+    if (!have) { byId.set(rec.id, rec); changed.push(rec); added++; }
+    else if (rec.updatedAt > val(have, "updatedAt")) { byId.set(rec.id, rec); changed.push(rec); updated++; }
   }
-  try { persist([...byId.values()]); }
+  try { if (changed.length) commit(changed); }
   catch { toast("Couldn't restore: this device's storage is full or blocked."); return; }
   toast(added || updated ? `Restored: ${added} new, ${updated} updated` : "Everything in that file is already here");
   openBackup();
@@ -796,19 +908,19 @@ function openBackup() {
     h("div", { class: "panel" },
       h("button", { class: "btn back", type: "button", onclick: closeBackup, style: "margin-bottom:14px" }, "← All entries"),
       h("div", { class: "eyebrow" }, "Backup and export"),
-      h("h2", {}, "Keep your races safe"),
+      h("h2", {}, "Excel export and import"),
       h("p", { class: "sub", style: "max-width:62ch" },
-        `Races are saved on this device only. ${entries.length} ${entries.length === 1 ? "entry is" : "entries are"} here now. `,
-        last ? `Last backup: ${fmtDate(last.slice(0, 10))}.` : "You haven't saved a backup yet.")
+        `Races sync to every phone and computer that opens the Race Book. ${entries.length} ${entries.length === 1 ? "entry is" : "entries are"} saved. `,
+        last ? `Last Excel export: ${fmtDate(last.slice(0, 10))}.` : "")
     ),
     h("section", { class: "card backup-step" },
       h("h3", {}, "Export to Excel"),
-      h("p", {}, "Saves every entry to one Excel file, one row per session. On iPhone, choose Save to Files, AirDrop it, or email it to yourself. This file is your backup."),
+      h("p", {}, "Saves every entry to one Excel file, one row per session. On iPhone, choose Save to Files, AirDrop it, or email it to yourself. Keep one now and then as your own copy."),
       h("div", { class: "actions" }, h("button", { class: "btn btn-primary", type: "button", onclick: exportExcel, disabled: !entries.length }, "Export to Excel"))
     ),
     h("section", { class: "card backup-step" },
-      h("h3", {}, "Restore from Excel"),
-      h("p", {}, "Moving to a new phone? Install the Race Book there, then pick the Excel file you exported. Entries already on the phone are kept, and newer edits win. Keep the Entry ID column if you edit the file in Excel."),
+      h("h3", {}, "Import from Excel"),
+      h("p", {}, "Adds the races from an Excel file exported from the Race Book, and they sync to every device. Races already here are kept, and newer edits win. Keep the Entry ID column if you edit the file in Excel."),
       h("div", { class: "actions" }, h("label", { class: "btn file-btn", for: "restore-file" }, "Choose Excel file", picker))
     )
   ));
@@ -841,11 +953,15 @@ const appleTouch = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.pl
 $("install").hidden = standalone || !appleTouch || getLocal(INSTALL_KEY) === "1";
 $("install-x").addEventListener("click", () => { setLocal(INSTALL_KEY, "1"); $("install").hidden = true; });
 
-// Another tab or window changed the list
-addEventListener("storage", e => { if (e.key === STORE_KEY) { loadEntries(); if (mode === "view") render(); else renderList(); } });
+// Another tab or window on this device changed the list
+addEventListener("storage", e => { if (e.key === RECORDS_KEY) { loadEntries(); refreshView(true); } });
+addEventListener("online", () => syncNow());
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") syncNow(); });
 
 loadEntries();
+setSync(Object.keys(pending).length ? "pending" : "idle");
 render();
+syncNow();
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 if ("serviceWorker" in navigator && location.protocol !== "file:") {
   addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
