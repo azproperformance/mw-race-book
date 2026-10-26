@@ -191,7 +191,6 @@ select {
 .chip { background: var(--chip); border-radius: 4px; padding: 1px 7px; font-size: 12px; color: var(--ink); white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .chip i { font-style: normal; color: var(--muted); margin-right: 4px; text-transform: uppercase; letter-spacing: 0.06em; font-size: 10.5px; }
 
-.row-lap { color: var(--muted); align-self: start; padding-top: 3px; }
 
 .empty { padding: 28px 8px; color: var(--muted); text-align: center; }
 .empty strong { display: block; color: var(--ink); font: 700 20px/1.2 var(--display); margin-bottom: 6px; }
@@ -206,11 +205,6 @@ select {
 .sub { margin: 0; color: var(--muted); }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 
-.result-strip { display: flex; flex-wrap: wrap; gap: 8px 28px; padding: 14px 18px; border-radius: 10px; background: var(--band); color: var(--band-ink); }
-.stat { display: grid; }
-.stat span { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); }
-.stat b { font: 700 26px/1.1 var(--display); }
-.stat b.mono { font: 500 20px/1.4 var(--mono); }
 
 .sheet { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; min-width: 0; }
@@ -329,7 +323,6 @@ const SECTIONS = [
     { k: "session", label: "Session", type: "select", options: ["Practice", "Qualifying", "Moto 1", "Moto 2", "Main race"] },
     { k: "racer", label: "Racer", pool: "racer", req: true },
     { k: "carNumber", label: "Car #", ph: "#", mode: "numeric" },
-    { k: "className", label: "Class", pool: "class", base: ["RZR 170", "RZR 570"] },
   ]},
   { title: "Tires", fields: [
     { k: "tireBrand", label: "Tire brand / type", pool: "tirebrand", ph: "Brand and model" },
@@ -344,14 +337,9 @@ const SECTIONS = [
   ]},
   { title: "Clutch", fields: [
     { k: "clutchWeights", label: "Clutch weights", pool: "weights", ph: "e.g. 3 × 10 g" },
-    { k: "primarySpring", label: "Primary spring", pool: "spring", ph: "Color / rate" },
     { k: "secondarySpring", label: "Secondary spring", pool: "spring", ph: "Color / rate" },
     { k: "belt", label: "Belt", ph: "Part # / age" },
     { k: "clutchNotes", label: "Clutch notes", type: "textarea", wide: true },
-  ]},
-  { title: "Result", fields: [
-    { k: "bestLap", label: "Best lap", ph: "1:42.350" },
-    { k: "laps", label: "Laps", type: "number", min: "0" },
   ]},
   { title: "Notes", fields: [
     { k: "notes", label: "General notes", type: "textarea", wide: true, rows: 6, ph: "How the car handled, what changed, what to try next time" },
@@ -587,7 +575,6 @@ function renderList() {
     const meta = [val(e, "racer") + (val(e, "carNumber") ? ` #${val(e, "carNumber")}` : ""), val(e, "session"), val(e, "event")].filter(Boolean).join(" · ");
     return h("button", { class: "row" + (e.id === sel ? " active" : ""), type: "button", onclick: () => select(e.id) },
       h("div", { class: "row-top" }, h("span", { class: "row-track" }, val(e, "track") || "Untitled"), h("span", { class: "row-date" }, fmtDate(val(e, "date")))),
-      h("span", { class: "row-lap mono" }, val(e, "bestLap")),
       meta ? h("div", { class: "row-meta" }, meta) : "",
       chips.length ? h("div", { class: "row-chips" }, chips.map(([k, v]) => h("span", { class: "chip" }, h("i", {}, k), v))) : ""
     );
@@ -618,10 +605,6 @@ function renderDetail() {
   if (!e) { document.body.classList.remove("show-detail"); pane.replaceChildren(renderOverview()); return; }
 
   const unit = (v, u) => (v ? `${v} ${u}` : "");
-  const stats = [
-    val(e, "bestLap") && ["Best lap", val(e, "bestLap"), true],
-    val(e, "laps") && ["Laps", val(e, "laps")],
-  ].filter(Boolean);
 
   const others = sortEntries(entries.filter(x => x.id !== e.id && lc(val(x, "track")) === lc(val(e, "track")) && val(e, "track")));
 
@@ -630,28 +613,26 @@ function renderDetail() {
       h("button", { class: "btn back", type: "button", onclick: () => { sel = null; render(); }, style: "margin-bottom:14px" }, "← All entries"),
       h("div", { class: "eyebrow" }, [fmtDate(val(e, "date"), { weekday: "short", month: "long", day: "numeric", year: "numeric" }), val(e, "session")].filter(Boolean).join(" · ")),
       h("h2", {}, val(e, "track") || "Untitled"),
-      h("p", { class: "sub" }, [val(e, "event"), val(e, "racer") + (val(e, "carNumber") ? ` #${val(e, "carNumber")}` : ""), val(e, "className")].filter(Boolean).join(" · ")),
+      h("p", { class: "sub" }, [val(e, "event"), val(e, "racer") + (val(e, "carNumber") ? ` #${val(e, "carNumber")}` : "")].filter(Boolean).join(" · ")),
       canWrite ? h("div", { class: "actions" },
         h("button", { class: "btn btn-primary", type: "button", onclick: () => startEdit(e) }, "Edit"),
         h("button", { class: "btn", type: "button", onclick: () => startCopy(e) }, "Copy setup to new entry"),
         deleteButton(e)
       ) : ""
     ),
-    stats.length ? h("div", { class: "result-strip" }, stats.map(([l, v, m]) => h("div", { class: "stat" }, h("span", {}, l), h("b", { class: m ? "mono" : "" }, v)))) : "",
     h("div", { class: "sheet" },
       card("Tires", [["Brand / type", val(e, "tireBrand")], ["Size", val(e, "tireSize")], ["Pressure", unit(val(e, "tirePressure"), "psi")], ["Condition", val(e, "tireCondition")]], val(e, "tireNotes")),
       card("Gearing", [["Ratio / setup", val(e, "gearing")]], val(e, "gearingNotes")),
-      card("Clutch", [["Weights", val(e, "clutchWeights")], ["Primary spring", val(e, "primarySpring")], ["Secondary spring", val(e, "secondarySpring")], ["Belt", val(e, "belt")]], val(e, "clutchNotes"))
+      card("Clutch", [["Weights", val(e, "clutchWeights")], ["Secondary spring", val(e, "secondarySpring")], ["Belt", val(e, "belt")]], val(e, "clutchNotes"))
     ),
     h("section", { class: "card" }, h("h3", {}, "Notes"), val(e, "notes") ? h("p", { class: "notes-body" }, val(e, "notes")) : h("p", { class: "notes-body", style: "color:var(--muted)" }, "No notes for this session.")),
     others.length ? h("section", { class: "compare" },
       h("h3", {}, `Other sessions at ${val(e, "track")}`),
       h("p", {}, "Compare setups from past visits. Click a row to open it."),
       h("div", { class: "table-wrap" }, h("table", {},
-        h("thead", {}, h("tr", {}, ["Date", "Racer", "Session", "Best lap", "Tires", "PSI", "Gearing", "Clutch weights"].map(t => h("th", {}, t)))),
+        h("thead", {}, h("tr", {}, ["Date", "Racer", "Session", "Tires", "PSI", "Gearing", "Clutch weights"].map(t => h("th", {}, t)))),
         h("tbody", {}, others.slice(0, 15).map(x => h("tr", { onclick: () => select(x.id) },
           h("td", {}, fmtDate(val(x, "date"))), h("td", {}, val(x, "racer")), h("td", {}, val(x, "session")),
-          h("td", { class: "mono" }, val(x, "bestLap")),
           h("td", {}, val(x, "tireBrand")), h("td", { class: "mono" }, val(x, "tirePressure")), h("td", {}, val(x, "gearing")), h("td", {}, val(x, "clutchWeights"))
         )))
       ))
@@ -771,10 +752,10 @@ function startNew() {
 function startCopy(e) {
   const seed = {};
   for (const f of FIELDS) seed[f.k] = val(e, f.k);
-  for (const k of ["bestLap", "laps", "notes", "session"]) seed[k] = "";
+  for (const k of ["notes", "session"]) seed[k] = "";
   seed.date = today();
   clearDraft();
-  openForm("new", seed, h("div", { class: "draft-note" }, `Setup copied from ${val(e, "track")}, ${fmtDate(val(e, "date"))}. Results and notes start blank.`));
+  openForm("new", seed, h("div", { class: "draft-note" }, `Setup copied from ${val(e, "track")}, ${fmtDate(val(e, "date"))}. Session and notes start blank.`));
 }
 
 function startEdit(e) { openForm("edit", e); }
@@ -799,7 +780,8 @@ function saveForm(ev) {
   const vals = readForm(), now = new Date().toISOString();
   const wasNew = mode === "new";
   const id = wasNew ? newId() : formSeed.id;
-  const rec = { ...vals, id, createdAt: (!wasNew && formSeed.createdAt) || now, updatedAt: now };
+  // An edit keeps values from fields the form no longer shows (Class, Best lap, …)
+  const rec = { ...(wasNew ? {} : formSeed), ...vals, id, createdAt: (!wasNew && formSeed.createdAt) || now, updatedAt: now };
   try {
     commit([rec]);
   } catch {

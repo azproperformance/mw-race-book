@@ -1,6 +1,6 @@
 // Keeps the Race Book working with no signal at the track.
 // Bump VERSION whenever app files change so phones pick up the new copy.
-const VERSION = "race-book-v3";
+const VERSION = "race-book-v4";
 const APP_FILES = [
   "./",
   "./index.html",
